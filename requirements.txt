@@ -1,0 +1,7 @@
+fdk>=0.1.89
+requests
+pyjwt
+urllib3
+serialization
+cryptography
+oci
