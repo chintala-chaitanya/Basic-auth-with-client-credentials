@@ -6,3 +6,9 @@ build_image: fnproject/python:3.11-dev
 run_image: fnproject/python:3.11
 entrypoint: /python/bin/fdk /function/func.py handler
 memory: 256
+config:
+  identity_domain_base_url: "REPLACE_WITH_IDENTITY_DOMAIN_BASE_URL"
+  client_id: "REPLACE_WITH_ADMIN_CLIENT_ID"
+  secret_ocid: "REPLACE_WITH_SECRET_OCID"
+  business_scope_prefix: "REPLACE_WITH_BUSINESS_SCOPE_PREFIX"
+  scope_cache_ttl: "REPLACE_WITH_SCOPE_CACHE_TTL_SECONDS"

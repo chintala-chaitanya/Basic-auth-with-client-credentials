@@ -14,6 +14,9 @@ oauth_apps = {}
 scope_cache = {}
 CACHE_TTL = 900
 ADMIN_SCOPE = "urn:opc:idm:__myscopes__"
+DEFAULT_BUSINESS_SCOPE_PREFIX = "oic_api_"
+BUSINESS_SCOPE_PREFIX_CONFIG_KEY = "business_scope_prefix"
+SCOPE_CACHE_TTL_CONFIG_KEY = "scope_cache_ttl"
 
 
 def mask_value(value, visible=10):
@@ -38,6 +41,21 @@ def deny(ctx, message, status_code=401):
     return build_response(ctx, status_code, {"active": False, "error": message})
 
 
+def get_business_scope_prefix(context):
+    prefix = (context.get(BUSINESS_SCOPE_PREFIX_CONFIG_KEY) or DEFAULT_BUSINESS_SCOPE_PREFIX).strip()
+    return prefix if prefix else DEFAULT_BUSINESS_SCOPE_PREFIX
+
+
+def get_scope_cache_ttl(context):
+    raw_ttl = context.get(SCOPE_CACHE_TTL_CONFIG_KEY, CACHE_TTL)
+    try:
+        ttl = int(raw_ttl)
+    except (TypeError, ValueError):
+        logger.warning("initContext: invalid scope_cache_ttl=%s; using default=%s", raw_ttl, CACHE_TTL)
+        return CACHE_TTL
+    return max(ttl, 0)
+
+
 def initContext(context):
     if "idcs" in oauth_apps:
         return
@@ -45,7 +63,9 @@ def initContext(context):
     oauth_apps["idcs"] = {
         "base_url": context["identity_domain_base_url"].rstrip("/"),
         "client_id": context["client_id"],  # admin app client_id
-        "client_secret": ociVault.getSecret(context["secret_ocid"])
+        "client_secret": ociVault.getSecret(context["secret_ocid"]),
+        "business_scope_prefix": get_business_scope_prefix(context),
+        "scope_cache_ttl": get_scope_cache_ttl(context)
     }
 
     logger.info(
@@ -53,6 +73,8 @@ def initContext(context):
         oauth_apps["idcs"]["base_url"],
         mask_value(oauth_apps["idcs"]["client_id"])
     )
+    logger.info("initContext: business_scope_prefix=%s", oauth_apps["idcs"]["business_scope_prefix"])
+    logger.info("initContext: scope_cache_ttl=%s", oauth_apps["idcs"]["scope_cache_ttl"])
 
 
 def extract_basic_auth(auth_header):
@@ -155,7 +177,7 @@ def fetch_app_by_client_guid(client_guid):
     return resp.json()
 
 
-def classify_scope(scope_obj):
+def classify_scope(scope_obj, business_scope_prefix):
     """
     Keep full raw scope for token request.
     Derive short business scope for API Gateway auth response.
@@ -167,8 +189,8 @@ def classify_scope(scope_obj):
         return None
 
     business = None
-    if "oic_api_" in raw:
-        idx = raw.find("oic_api_")
+    if business_scope_prefix in raw:
+        idx = raw.find(business_scope_prefix)
         suffix = raw[idx:]
         for delim in [":", "/", " ", ","]:
             if delim in suffix:
@@ -185,12 +207,16 @@ def classify_scope(scope_obj):
 def get_client_scopes(client_id, client_secret):
     now = time.time()
     cached = scope_cache.get(client_id)
+    cache_ttl = oauth_apps["idcs"].get("scope_cache_ttl", CACHE_TTL)
 
-    if cached and cached["expiry"] > now:
+    if cache_ttl > 0 and cached and cached["expiry"] > now:
         logger.info("get_client_scopes: cache hit for %s", mask_value(client_id))
         return cached["data"]
 
-    logger.info("get_client_scopes: cache miss for %s", mask_value(client_id))
+    if cache_ttl <= 0:
+        logger.info("get_client_scopes: cache disabled for %s", mask_value(client_id))
+    else:
+        logger.info("get_client_scopes: cache miss for %s", mask_value(client_id))
 
     caller_token = get_access_token(client_id, client_secret)  # with ADMIN_SCOPE default
     claims = decode_jwt_payload(caller_token)
@@ -204,25 +230,33 @@ def get_client_scopes(client_id, client_secret):
 
     app_data = fetch_app_by_client_guid(client_guid)
     allowed = app_data.get("allowedScopes", [])
+    business_scope_prefix = oauth_apps["idcs"].get("business_scope_prefix", DEFAULT_BUSINESS_SCOPE_PREFIX)
 
-    parsed = [classify_scope(s) for s in allowed]
+    parsed = [classify_scope(s, business_scope_prefix) for s in allowed]
     parsed = [p for p in parsed if p]
 
-    business_scope = next((p["business"] for p in parsed if p["business"]), None)
+    business_scopes = []
+    seen_business_scopes = set()
+    for p in parsed:
+        if p["business"] and p["business"] not in seen_business_scopes:
+            business_scopes.append(p["business"])
+            seen_business_scopes.add(p["business"])
+
     consumer_scope_full = next((p["raw"] for p in parsed if p["is_consumer"]), None)
 
-    logger.info("get_client_scopes: business_scope=%s", business_scope)
+    logger.info("get_client_scopes: business_scopes=%s", business_scopes)
     logger.info("get_client_scopes: consumer_scope_full=%s", consumer_scope_full)
 
     result = {
-        "business_scope": business_scope,
+        "business_scopes": business_scopes,
         "consumer_scope_full": consumer_scope_full
     }
 
-    scope_cache[client_id] = {
-        "data": result,
-        "expiry": now + CACHE_TTL
-    }
+    if cache_ttl > 0:
+        scope_cache[client_id] = {
+            "data": result,
+            "expiry": now + cache_ttl
+        }
 
     return result
 
@@ -299,10 +333,10 @@ def handler(ctx, data: io.BytesIO = None):
         client_id, client_secret = extract_basic_auth(auth_header)
         scopes = get_client_scopes(client_id, client_secret)
 
-        business_scope = scopes.get("business_scope")
+        business_scopes = scopes.get("business_scopes", [])
         consumer_scope_full = scopes.get("consumer_scope_full")
 
-        if not business_scope:
+        if not business_scopes:
             return deny(ctx, "No business scope assigned")
         if not consumer_scope_full:
             return deny(ctx, "consumer::all not assigned")
@@ -314,7 +348,7 @@ def handler(ctx, data: io.BytesIO = None):
         logger.info("handler: success for %s", mask_value(client_id))
         return build_response(ctx, 200, {
             "active": True,
-            "scope": business_scope,
+            "scope": business_scopes,
             "token": f"Bearer {oic_token}",
             "context": {"token": f"Bearer {oic_token}"}
         })
@@ -322,4 +356,3 @@ def handler(ctx, data: io.BytesIO = None):
     except Exception as ex:
         logger.exception("handler: unhandled exception")
         return deny(ctx, str(ex), 500)
-
