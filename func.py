@@ -27,6 +27,10 @@ def mask_value(value, visible=10):
     return value[:visible] + "...(masked)"
 
 
+def mask_values(values, visible=10):
+    return [mask_value(value, visible) for value in values]
+
+
 def build_response(ctx, status_code, payload):
     return response.Response(
         ctx,
@@ -121,7 +125,7 @@ def get_access_token(client_id, client_secret, scope=None):
     logger.info(
         "get_access_token: client_id=%s scope=%s",
         mask_value(client_id),
-        effective_scope
+        mask_value(effective_scope, visible=20)
     )
 
     resp = requests.post(token_url, headers=headers, data=form, timeout=8)
@@ -244,8 +248,8 @@ def get_client_scopes(client_id, client_secret):
 
     consumer_scope_full = next((p["raw"] for p in parsed if p["is_consumer"]), None)
 
-    logger.info("get_client_scopes: business_scopes=%s", business_scopes)
-    logger.info("get_client_scopes: consumer_scope_full=%s", consumer_scope_full)
+    logger.info("get_client_scopes: business_scopes=%s", mask_values(business_scopes))
+    logger.info("get_client_scopes: consumer_scope_full=%s", mask_value(consumer_scope_full, visible=20))
 
     result = {
         "business_scopes": business_scopes,
@@ -342,7 +346,7 @@ def handler(ctx, data: io.BytesIO = None):
             return deny(ctx, "consumer::all not assigned")
 
         # IMPORTANT: request token with full scope string from IAM App
-        logger.info("handler: using full consumer scope=%s", consumer_scope_full)
+        logger.info("handler: using full consumer scope=%s", mask_value(consumer_scope_full, visible=20))
         oic_token = get_access_token(client_id, client_secret, consumer_scope_full)
 
         logger.info("handler: success for %s", mask_value(client_id))
