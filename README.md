@@ -1,4 +1,4 @@
-# Basic Auth With Client Credentials Authorizer
+# Basic Auth With Client Credentials Authorizer Final
 
 OCI API Gateway and many downstream Oracle integrations are easiest to protect with OAuth scopes. Some clients, however, cannot perform an OAuth client credentials flow themselves. They may only be able to send a Basic Authorization header containing a client ID and client secret.
 
