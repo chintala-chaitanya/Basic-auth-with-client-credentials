@@ -2,6 +2,10 @@
 
 OCI API Gateway and many downstream Oracle integrations are easiest to protect with OAuth scopes. Some clients, however, cannot perform an OAuth client credentials flow themselves. They may only be able to send a Basic Authorization header containing a client ID and client secret.
 
+> **Important:** This repository contains sample code that demonstrates how to use Basic Authentication with client credentials to call Oracle Integration Cloud through OCI API Gateway and an OCI Functions custom authorizer. This pattern is intended for corner-case scenarios where clients cannot perform a standard OAuth client credentials flow. It should not be used as the default approach when OAuth can be supported directly. Review, test, and adapt the code for your own environment, security requirements, operational standards, and compliance guidelines before using it in production.
+
+> **Important:** This sample is not a general recommendation to replace OAuth with Basic Authentication. Use it only when you have a justified compatibility constraint and appropriate compensating controls.
+
 This OCI Function handles that corner case. It acts as a custom authorizer for OCI API Gateway:
 
 - accepts Basic credentials from the incoming request
@@ -50,7 +54,7 @@ Successful response shape:
 }
 ```
 
-The `scope` field is a list of business scopes. OCI API Gateway can use these values for route-level scope checks.
+The `scope` field is a list of business scopes. This branch supports multiple route-restriction scopes, so a single client app can authorize routes that require any matching scope from the returned list. OCI API Gateway can use these values for route-level scope checks.
 
 ## Configuration
 
